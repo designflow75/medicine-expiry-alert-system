@@ -218,7 +218,7 @@ public class EditMedicineDialog extends JDialog {
             JOptionPane.showMessageDialog(this, "Medicine details updated successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
             dispose();
         } else {
-            JOptionPane.showMessageDialog(this, "Failed to update record in MySQL database.", "Database Error", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Failed to update record in database.", "Database Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 

@@ -453,7 +453,7 @@ public class DashboardFrame extends BaseFrame {
         title.setFont(FONT_TITLE);
         title.setForeground(COLOR_PRIMARY);
 
-        JLabel sub = new JLabel("Add medicine records to MySQL. Expiry status is calculated automatically.");
+        JLabel sub = new JLabel("Add medicine records to the database. Expiry status is calculated automatically.");
         sub.setFont(FONT_BODY);
         sub.setForeground(COLOR_TEXT_MUTED);
 
@@ -564,7 +564,7 @@ public class DashboardFrame extends BaseFrame {
         JButton clearBtn = createSecondaryButton("Clear Form");
         clearBtn.addActionListener(e -> clearAddMedicineForm());
 
-        JButton submitBtn = createPrimaryButton("Save Medicine to MySQL");
+        JButton submitBtn = createPrimaryButton("Save Medicine Record");
         submitBtn.setPreferredSize(new Dimension(190, 38));
         submitBtn.addActionListener(e -> handleAddMedicine());
 
@@ -645,12 +645,12 @@ public class DashboardFrame extends BaseFrame {
 
         boolean success = medicineDAO.addMedicine(newMed);
         if (success) {
-            showSuccess("Medicine '" + name + "' added successfully to MySQL!\nCalculated Expiry Status: " + newMed.getStatus().getDisplayName());
+            showSuccess("Medicine '" + name + "' added successfully!\nCalculated Expiry Status: " + newMed.getStatus().getDisplayName());
             clearAddMedicineForm();
             refreshDashboardData();
             selectNav("MY_MEDICINES");
         } else {
-            showError("Failed to save medicine record to MySQL database.");
+            showError("Failed to save medicine record to database.");
         }
     }
 
@@ -685,7 +685,7 @@ public class DashboardFrame extends BaseFrame {
         title.setFont(FONT_TITLE);
         title.setForeground(COLOR_PRIMARY);
 
-        JLabel sub = new JLabel("Complete inventory of medicines saved in MySQL for " + currentUser.getFullName());
+        JLabel sub = new JLabel("Complete inventory of medicines saved in database for " + currentUser.getFullName());
         sub.setFont(FONT_BODY);
         sub.setForeground(COLOR_TEXT_MUTED);
 
@@ -858,7 +858,7 @@ public class DashboardFrame extends BaseFrame {
                 reloadInventoryTable();
                 refreshDashboardData();
             } else {
-                showError("Failed to delete record from MySQL.");
+                showError("Failed to delete record from database.");
             }
         }
     }
@@ -1121,7 +1121,7 @@ public class DashboardFrame extends BaseFrame {
         title.setFont(FONT_TITLE);
         title.setForeground(COLOR_PRIMARY);
 
-        JLabel sub = new JLabel("Live analytical counts calculated directly from MySQL database queries.");
+        JLabel sub = new JLabel("Live analytical counts calculated directly from database queries.");
         sub.setFont(FONT_BODY);
         sub.setForeground(COLOR_TEXT_MUTED);
 

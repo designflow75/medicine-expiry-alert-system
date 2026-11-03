@@ -176,12 +176,30 @@ public class MedicineDAOImpl implements MedicineDAO {
         }
 
         if (statusFilter != null) {
+            LocalDate today = LocalDate.now();
             switch (statusFilter) {
-                case EXPIRED -> sql.append("AND expiry_date < CURRENT_DATE ");
-                case EXPIRES_TODAY -> sql.append("AND expiry_date = CURRENT_DATE ");
-                case CRITICAL -> sql.append("AND expiry_date > CURRENT_DATE AND expiry_date <= DATE_ADD(CURRENT_DATE, INTERVAL 7 DAY) ");
-                case EXPIRING_SOON -> sql.append("AND expiry_date > DATE_ADD(CURRENT_DATE, INTERVAL 7 DAY) AND expiry_date <= DATE_ADD(CURRENT_DATE, INTERVAL 30 DAY) ");
-                case SAFE -> sql.append("AND expiry_date > DATE_ADD(CURRENT_DATE, INTERVAL 30 DAY) ");
+                case EXPIRED -> {
+                    sql.append("AND expiry_date < ? ");
+                    params.add(Date.valueOf(today));
+                }
+                case EXPIRES_TODAY -> {
+                    sql.append("AND expiry_date = ? ");
+                    params.add(Date.valueOf(today));
+                }
+                case CRITICAL -> {
+                    sql.append("AND expiry_date > ? AND expiry_date <= ? ");
+                    params.add(Date.valueOf(today));
+                    params.add(Date.valueOf(today.plusDays(7)));
+                }
+                case EXPIRING_SOON -> {
+                    sql.append("AND expiry_date > ? AND expiry_date <= ? ");
+                    params.add(Date.valueOf(today.plusDays(7)));
+                    params.add(Date.valueOf(today.plusDays(30)));
+                }
+                case SAFE -> {
+                    sql.append("AND expiry_date > ? ");
+                    params.add(Date.valueOf(today.plusDays(30)));
+                }
             }
         }
 
@@ -213,11 +231,13 @@ public class MedicineDAOImpl implements MedicineDAO {
     @Override
     public List<Medicine> getMedicinesExpiringWithinDays(int userId, int minDays, int maxDays) {
         List<Medicine> list = new ArrayList<>();
+        LocalDate minDate = LocalDate.now().plusDays(minDays);
+        LocalDate maxDate = LocalDate.now().plusDays(maxDays);
         String sql = """
             SELECT * FROM medicines
             WHERE user_id = ?
-              AND expiry_date >= DATE_ADD(CURRENT_DATE, INTERVAL ? DAY)
-              AND expiry_date <= DATE_ADD(CURRENT_DATE, INTERVAL ? DAY)
+              AND expiry_date >= ?
+              AND expiry_date <= ?
             ORDER BY expiry_date ASC
             """;
 
@@ -225,8 +245,8 @@ public class MedicineDAOImpl implements MedicineDAO {
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             ps.setInt(1, userId);
-            ps.setInt(2, minDays);
-            ps.setInt(3, maxDays);
+            ps.setDate(2, Date.valueOf(minDate));
+            ps.setDate(3, Date.valueOf(maxDate));
 
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -242,12 +262,13 @@ public class MedicineDAOImpl implements MedicineDAO {
     @Override
     public List<Medicine> getExpiredMedicines(int userId) {
         List<Medicine> list = new ArrayList<>();
-        String sql = "SELECT * FROM medicines WHERE user_id = ? AND expiry_date < CURRENT_DATE ORDER BY expiry_date ASC";
+        String sql = "SELECT * FROM medicines WHERE user_id = ? AND expiry_date < ? ORDER BY expiry_date ASC";
 
         try (Connection conn = dbConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             ps.setInt(1, userId);
+            ps.setDate(2, Date.valueOf(LocalDate.now()));
 
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -263,12 +284,13 @@ public class MedicineDAOImpl implements MedicineDAO {
     @Override
     public List<Medicine> getMedicinesExpiringToday(int userId) {
         List<Medicine> list = new ArrayList<>();
-        String sql = "SELECT * FROM medicines WHERE user_id = ? AND expiry_date = CURRENT_DATE ORDER BY medicine_name ASC";
+        String sql = "SELECT * FROM medicines WHERE user_id = ? AND expiry_date = ? ORDER BY medicine_name ASC";
 
         try (Connection conn = dbConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             ps.setInt(1, userId);
+            ps.setDate(2, Date.valueOf(LocalDate.now()));
 
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -288,13 +310,17 @@ public class MedicineDAOImpl implements MedicineDAO {
             map.put(st, 0);
         }
 
+        LocalDate today = LocalDate.now();
+        LocalDate day7 = today.plusDays(7);
+        LocalDate day30 = today.plusDays(30);
+
         String sql = """
             SELECT
-                COUNT(CASE WHEN expiry_date < CURRENT_DATE THEN 1 END) AS expired_cnt,
-                COUNT(CASE WHEN expiry_date = CURRENT_DATE THEN 1 END) AS today_cnt,
-                COUNT(CASE WHEN expiry_date > CURRENT_DATE AND expiry_date <= DATE_ADD(CURRENT_DATE, INTERVAL 7 DAY) THEN 1 END) AS critical_cnt,
-                COUNT(CASE WHEN expiry_date > DATE_ADD(CURRENT_DATE, INTERVAL 7 DAY) AND expiry_date <= DATE_ADD(CURRENT_DATE, INTERVAL 30 DAY) THEN 1 END) AS expiring_soon_cnt,
-                COUNT(CASE WHEN expiry_date > DATE_ADD(CURRENT_DATE, INTERVAL 30 DAY) THEN 1 END) AS safe_cnt
+                COUNT(CASE WHEN expiry_date < ? THEN 1 END) AS expired_cnt,
+                COUNT(CASE WHEN expiry_date = ? THEN 1 END) AS today_cnt,
+                COUNT(CASE WHEN expiry_date > ? AND expiry_date <= ? THEN 1 END) AS critical_cnt,
+                COUNT(CASE WHEN expiry_date > ? AND expiry_date <= ? THEN 1 END) AS expiring_soon_cnt,
+                COUNT(CASE WHEN expiry_date > ? THEN 1 END) AS safe_cnt
             FROM medicines
             WHERE user_id = ?
             """;
@@ -302,7 +328,14 @@ public class MedicineDAOImpl implements MedicineDAO {
         try (Connection conn = dbConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
-            ps.setInt(1, userId);
+            ps.setDate(1, Date.valueOf(today));
+            ps.setDate(2, Date.valueOf(today));
+            ps.setDate(3, Date.valueOf(today));
+            ps.setDate(4, Date.valueOf(day7));
+            ps.setDate(5, Date.valueOf(day7));
+            ps.setDate(6, Date.valueOf(day30));
+            ps.setDate(7, Date.valueOf(day30));
+            ps.setInt(8, userId);
 
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {

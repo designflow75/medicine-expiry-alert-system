@@ -6,38 +6,46 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.Date;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDate;
 import java.util.Properties;
 
 /**
- * Singleton database connection manager handling MySQL JDBC connectivity,
- * configuration loading, automatic table creation, and demo account seeding.
+ * Singleton database connection manager supporting both Supabase (Cloud PostgreSQL)
+ * and local MySQL databases via JDBC.
+ *
+ * Provides:
+ * - Dynamic JDBC driver loading (PostgreSQL or MySQL)
+ * - Transparent connection string parsing and SSL configuration
+ * - Automatic schema creation (tables and indexes) tailored for both PostgreSQL & MySQL
+ * - Automatic demo user and sample medicines seeding
+ * - Connection diagnostic and test utilities
  */
 public class DatabaseConnection {
 
     private static DatabaseConnection instance;
 
-    private String host = "localhost";
-    private int port = 3306;
-    private String database = "medicine_expiry_db";
-    private String username = "root";
+    private String dbType = "supabase"; // "supabase", "postgresql", or "mysql"
+    private String customUrl = "";
+    private String host = "aws-0-ap-southeast-1.pooler.supabase.com";
+    private int port = 5432;
+    private String database = "postgres";
+    private String username = "postgres.ahfygicztfdszpxtohsg";
     private String password = "";
+    private boolean ssl = true;
 
     private boolean driverLoaded = false;
     private String lastError = "";
+    private String activeDatabaseProductName = "Unknown";
 
     private DatabaseConnection() {
         loadConfig();
-        try {
-            Class.forName("com.mysql.cj.jdbc.Driver");
-            driverLoaded = true;
-        } catch (ClassNotFoundException e) {
-            lastError = "MySQL JDBC Driver (com.mysql.cj.jdbc.Driver) not found in classpath.";
-            System.err.println(lastError);
-        }
+        ensureDriverLoaded();
     }
 
     public static synchronized DatabaseConnection getInstance() {
@@ -48,9 +56,9 @@ public class DatabaseConnection {
     }
 
     /**
-     * Loads connection properties from config/db.properties if available.
+     * Loads connection properties from config/db.properties.
      */
-    private void loadConfig() {
+    public void loadConfig() {
         File configFile = new File("config/db.properties");
         Properties props = new Properties();
         if (configFile.exists()) {
@@ -61,39 +69,115 @@ public class DatabaseConnection {
             }
         }
 
-        this.host = props.getProperty("db.host", "localhost").trim();
-        try {
-            this.port = Integer.parseInt(props.getProperty("db.port", "3306").trim());
-        } catch (NumberFormatException e) {
-            this.port = 3306;
+        this.customUrl = props.getProperty("db.url", "").trim();
+        this.dbType = props.getProperty("db.type", "auto").trim().toLowerCase();
+
+        // Auto-detect db type if unspecified or auto
+        if ("auto".equals(this.dbType) || this.dbType.isEmpty()) {
+            if (!customUrl.isEmpty()) {
+                if (customUrl.startsWith("jdbc:postgresql:") || customUrl.contains("supabase")) {
+                    this.dbType = "supabase";
+                } else {
+                    this.dbType = "mysql";
+                }
+            } else {
+                String rawHost = props.getProperty("db.host", "").toLowerCase();
+                if (rawHost.contains("supabase") || rawHost.contains("postgres")) {
+                    this.dbType = "supabase";
+                } else {
+                    // Default to supabase if host is set to supabase pooler, otherwise fallback to mysql
+                    this.dbType = rawHost.contains("localhost") ? "mysql" : "supabase";
+                }
+            }
         }
-        this.database = props.getProperty("db.name", "medicine_expiry_db").trim();
-        this.username = props.getProperty("db.user", "root").trim();
-        this.password = props.getProperty("db.password", "").trim();
+
+        boolean isPostgres = isPostgreSQL();
+        String defaultHost = isPostgres ? "aws-0-ap-southeast-1.pooler.supabase.com" : "localhost";
+        int defaultPort = isPostgres ? 5432 : 3306;
+        String defaultDb = isPostgres ? "postgres" : "medicine_expiry_db";
+        String defaultUser = isPostgres ? "postgres.ahfygicztfdszpxtohsg" : "root";
+
+        if (!isPostgres && props.containsKey("db.mysql.host")) {
+            this.host = props.getProperty("db.mysql.host", defaultHost).trim();
+            try {
+                this.port = Integer.parseInt(props.getProperty("db.mysql.port", "3306").trim());
+            } catch (NumberFormatException e) {
+                this.port = 3306;
+            }
+            this.database = props.getProperty("db.mysql.name", defaultDb).trim();
+            this.username = props.getProperty("db.mysql.user", defaultUser).trim();
+            this.password = props.getProperty("db.mysql.password", "").trim();
+            this.ssl = false;
+        } else {
+            this.host = props.getProperty("db.host", defaultHost).trim();
+            try {
+                this.port = Integer.parseInt(props.getProperty("db.port", String.valueOf(defaultPort)).trim());
+            } catch (NumberFormatException e) {
+                this.port = defaultPort;
+            }
+            this.database = props.getProperty("db.name", defaultDb).trim();
+            this.username = props.getProperty("db.user", defaultUser).trim();
+            this.password = props.getProperty("db.password", "").trim();
+            this.ssl = Boolean.parseBoolean(props.getProperty("db.ssl", isPostgres ? "true" : "false").trim());
+        }
+    }
+
+    public boolean isPostgreSQL() {
+        return "supabase".equals(dbType) || "postgres".equals(dbType) || "postgresql".equals(dbType);
+    }
+
+    private void ensureDriverLoaded() {
+        try {
+            if (isPostgreSQL()) {
+                Class.forName("org.postgresql.Driver");
+                driverLoaded = true;
+            } else {
+                Class.forName("com.mysql.cj.jdbc.Driver");
+                driverLoaded = true;
+            }
+        } catch (ClassNotFoundException e) {
+            driverLoaded = false;
+            lastError = (isPostgreSQL() ? "PostgreSQL JDBC Driver" : "MySQL JDBC Driver") + " not found in classpath.";
+            System.err.println(lastError);
+        }
     }
 
     public String getJdbcUrl() {
-        return "jdbc:mysql://" + host + ":" + port + "/" + database +
-                "?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
+        if (!customUrl.isEmpty()) {
+            return customUrl;
+        }
+
+        if (isPostgreSQL()) {
+            // Supabase / PostgreSQL JDBC URL
+            String sslParam = ssl ? "?sslmode=require" : "";
+            return "jdbc:postgresql://" + host + ":" + port + "/" + database + sslParam;
+        } else {
+            // MySQL JDBC URL
+            return "jdbc:mysql://" + host + ":" + port + "/" + database +
+                    "?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
+        }
     }
 
     /**
-     * Obtains an active connection to MySQL.
+     * Obtains an active connection to the configured database.
      */
     public Connection getConnection() throws SQLException {
         if (!driverLoaded) {
-            try {
-                Class.forName("com.mysql.cj.jdbc.Driver");
-                driverLoaded = true;
-            } catch (ClassNotFoundException e) {
-                throw new SQLException("MySQL JDBC Driver not found in classpath.");
-            }
+            ensureDriverLoaded();
         }
-        return DriverManager.getConnection(getJdbcUrl(), username, password);
+
+        try {
+            Connection conn = DriverManager.getConnection(getJdbcUrl(), username, password);
+            this.activeDatabaseProductName = conn.getMetaData().getDatabaseProductName();
+            return conn;
+        } catch (SQLException e) {
+            lastError = e.getMessage();
+            throw e;
+        }
     }
 
     /**
-     * Tests connectivity to MySQL server.
+     * Tests connectivity to the database.
      */
     public boolean testConnection() {
         try (Connection conn = getConnection();
@@ -111,14 +195,87 @@ public class DatabaseConnection {
         return lastError;
     }
 
+    public String getDatabaseTypeDisplay() {
+        if (isPostgreSQL()) {
+            return "Supabase (Cloud PostgreSQL)";
+        }
+        return "MySQL (Local/Server)";
+    }
+
+    public String getActiveDatabaseProductName() {
+        return activeDatabaseProductName;
+    }
+
     /**
-     * Automatically initializes tables and seeds the demo account.
+     * Automatically initializes tables, constraints, indexes, and seeds the demo account.
+     * Selects appropriate DDL syntax based on PostgreSQL or MySQL.
      */
     public synchronized boolean initializeDatabase() {
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
+        try (Connection conn = getConnection()) {
+            boolean isPg = conn.getMetaData().getDatabaseProductName().toLowerCase().contains("postgres");
 
-            // 1. Users Table
+            if (isPg) {
+                initPostgreSQLSchema(conn);
+            } else {
+                initMySQLSchema(conn);
+            }
+
+            seedDemoAccount(conn, isPg);
+            return true;
+        } catch (SQLException e) {
+            lastError = e.getMessage();
+            System.err.println("Database auto-initialization error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void initPostgreSQLSchema(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement()) {
+            // 1. Users table (PostgreSQL)
+            String createUsersSql = """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id SERIAL PRIMARY KEY,
+                    full_name VARCHAR(100) NOT NULL,
+                    student_id VARCHAR(50),
+                    college_name VARCHAR(150),
+                    email VARCHAR(100) NOT NULL UNIQUE,
+                    password VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                """;
+            stmt.execute(createUsersSql);
+
+            // Users indexes
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);");
+
+            // 2. Medicines table (PostgreSQL)
+            String createMedicinesSql = """
+                CREATE TABLE IF NOT EXISTS medicines (
+                    medicine_id SERIAL PRIMARY KEY,
+                    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    medicine_name VARCHAR(150) NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    batch_number VARCHAR(50) NOT NULL,
+                    quantity INT NOT NULL CHECK (quantity >= 0),
+                    purchase_date DATE NOT NULL,
+                    expiry_date DATE NOT NULL,
+                    storage_location VARCHAR(100),
+                    notes TEXT,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                """;
+            stmt.execute(createMedicinesSql);
+
+            // Medicines indexes
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_med_expiry_date ON medicines (expiry_date);");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_med_category ON medicines (category);");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_med_batch ON medicines (batch_number);");
+        }
+    }
+
+    private void initMySQLSchema(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement()) {
+            // 1. Users Table (MySQL)
             String createUsersSql = """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -133,7 +290,7 @@ public class DatabaseConnection {
                 """;
             stmt.execute(createUsersSql);
 
-            // 2. Medicines Table
+            // 2. Medicines Table (MySQL)
             String createMedicinesSql = """
                 CREATE TABLE IF NOT EXISTS medicines (
                     medicine_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -154,50 +311,110 @@ public class DatabaseConnection {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
                 """;
             stmt.execute(createMedicinesSql);
-
-            // 3. Ensure Demo Account Exists
-            seedDemoAccount(stmt);
-
-            return true;
-        } catch (SQLException e) {
-            lastError = e.getMessage();
-            System.err.println("Database auto-initialization error: " + e.getMessage());
-            return false;
         }
     }
 
-    private void seedDemoAccount(Statement stmt) throws SQLException {
+    private void seedDemoAccount(Connection conn, boolean isPg) throws SQLException {
         String demoEmail = "demo@medicine.com";
         String demoHashedPassword = PasswordUtil.hashPassword("Demo@123");
+        int demoUserId = 1;
 
-        // Insert or update demo user
-        String seedUserSql = String.format("""
-            INSERT INTO users (user_id, full_name, student_id, college_name, email, password)
-            VALUES (1, 'Demo Student', 'KTU-AIML-042', 'KTU College of Engineering', '%s', '%s')
-            ON DUPLICATE KEY UPDATE password='%s', full_name='Demo Student';
-            """, demoEmail, demoHashedPassword, demoHashedPassword);
-        stmt.execute(seedUserSql);
+        // Upsert demo user
+        if (isPg) {
+            String seedUserPg = """
+                INSERT INTO users (user_id, full_name, student_id, college_name, email, password)
+                VALUES (1, 'Demo Student', 'KTU-AIML-042', 'KTU College of Engineering', ?, ?)
+                ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, password = EXCLUDED.password
+                RETURNING user_id;
+                """;
+            try (PreparedStatement ps = conn.prepareStatement(seedUserPg)) {
+                ps.setString(1, demoEmail);
+                ps.setString(2, demoHashedPassword);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        demoUserId = rs.getInt(1);
+                    }
+                }
+            } catch (SQLException e) {
+                // If conflict on user_id, fall back to lookup
+                try (PreparedStatement psLookup = conn.prepareStatement("SELECT user_id FROM users WHERE LOWER(email) = ?")) {
+                    psLookup.setString(1, demoEmail);
+                    try (ResultSet rs = psLookup.executeQuery()) {
+                        if (rs.next()) demoUserId = rs.getInt(1);
+                    }
+                }
+            }
+
+            // Sync sequence to avoid collision on next registration
+            try (Statement s = conn.createStatement()) {
+                s.execute("SELECT setval(pg_get_serial_sequence('users', 'user_id'), COALESCE((SELECT MAX(user_id) FROM users), 1));");
+            } catch (Exception ignored) {
+            }
+        } else {
+            String seedUserSql = String.format("""
+                INSERT INTO users (user_id, full_name, student_id, college_name, email, password)
+                VALUES (1, 'Demo Student', 'KTU-AIML-042', 'KTU College of Engineering', '%s', '%s')
+                ON DUPLICATE KEY UPDATE password='%s', full_name='Demo Student';
+                """, demoEmail, demoHashedPassword, demoHashedPassword);
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(seedUserSql);
+            }
+            demoUserId = 1;
+        }
 
         // Check if demo user has medicines
-        try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM medicines WHERE user_id = 1")) {
-            if (rs.next() && rs.getInt(1) == 0) {
-                // Seed sample medicines for demo
-                String seedMedicinesSql = """
-                    INSERT INTO medicines (user_id, medicine_name, category, batch_number, quantity, purchase_date, expiry_date, storage_location, notes) VALUES
-                    (1, 'Amoxicillin 500mg', 'Antibiotics', 'AMX-2024-09', 12, DATE_SUB(CURRENT_DATE, INTERVAL 180 DAY), DATE_SUB(CURRENT_DATE, INTERVAL 15 DAY), 'Medicine Cabinet A', 'Prescription antibiotic. Expired past shelf-life.'),
-                    (1, 'Cough Syrup Dextromethorphan', 'Syrups', 'DXM-2024-11', 1, DATE_SUB(CURRENT_DATE, INTERVAL 90 DAY), DATE_SUB(CURRENT_DATE, INTERVAL 3 DAY), 'First Aid Box', 'Bottle opened 3 months ago. Do not use.'),
-                    (1, 'Hydrocortisone Cream 1%', 'Ointments', 'HYD-TODAY-01', 2, DATE_SUB(CURRENT_DATE, INTERVAL 60 DAY), CURRENT_DATE, 'Top Drawer', 'Expires today! Use or discard immediately.'),
-                    (1, 'Insulin Glargine 100 IU/ml', 'Injections', 'INS-7889-C', 3, DATE_SUB(CURRENT_DATE, INTERVAL 45 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 3 DAY), 'Refrigerator (2-8 C)', 'Keep refrigerated. Expiring in 3 days.'),
-                    (1, 'Salbutamol Inhaler 100mcg', 'Respiratory', 'SAL-2025-04', 1, DATE_SUB(CURRENT_DATE, INTERVAL 60 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 6 DAY), 'Emergency Bag', 'Rescue inhaler. Reorder soon.'),
-                    (1, 'Cetirizine 10mg', 'Antihistamines', 'CET-8812-E', 20, DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 14 DAY), 'Medicine Cabinet A', 'Allergy relief tablets.'),
-                    (1, 'Ibuprofen 400mg', 'Pain Relief', 'IBU-9921-X', 15, DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 25 DAY), 'Medicine Cabinet B', 'Anti-inflammatory tablets.'),
-                    (1, 'Paracetamol 650mg', 'Analgesics', 'PCM-650-SAFE', 30, DATE_SUB(CURRENT_DATE, INTERVAL 15 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 180 DAY), 'Medicine Cabinet A', 'Common fever and pain relief.'),
-                    (1, 'Vitamin C 500mg Chewable', 'Supplements', 'VTC-500-SAFE', 50, DATE_SUB(CURRENT_DATE, INTERVAL 10 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 365 DAY), 'Kitchen Shelf', 'Immunity booster vitamins.'),
-                    (1, 'Metformin 500mg', 'Diabetes', 'MET-500-SAFE', 60, DATE_SUB(CURRENT_DATE, INTERVAL 20 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 240 DAY), 'Bedroom Drawer', 'Daily blood sugar control medication.');
-                    """;
-                stmt.execute(seedMedicinesSql);
+        try (PreparedStatement checkStmt = conn.prepareStatement("SELECT COUNT(*) FROM medicines WHERE user_id = ?")) {
+            checkStmt.setInt(1, demoUserId);
+            try (ResultSet rs = checkStmt.executeQuery()) {
+                if (rs.next() && rs.getInt(1) == 0) {
+                    insertDemoMedicines(conn, demoUserId, isPg);
+                }
+            }
+        }
+    }
+
+    private void insertDemoMedicines(Connection conn, int userId, boolean isPg) throws SQLException {
+        LocalDate today = LocalDate.now();
+
+        Object[][] demoItems = {
+            {"Amoxicillin 500mg", "Antibiotics", "AMX-2024-09", 12, today.minusDays(180), today.minusDays(15), "Medicine Cabinet A", "Prescription antibiotic. Expired past shelf-life."},
+            {"Cough Syrup Dextromethorphan", "Syrups", "DXM-2024-11", 1, today.minusDays(90), today.minusDays(3), "First Aid Box", "Bottle opened 3 months ago. Do not use."},
+            {"Hydrocortisone Cream 1%", "Ointments", "HYD-TODAY-01", 2, today.minusDays(60), today, "Top Drawer", "Expires today! Use or discard immediately."},
+            {"Insulin Glargine 100 IU/ml", "Injections", "INS-7889-C", 3, today.minusDays(45), today.plusDays(3), "Refrigerator (2-8 C)", "Keep refrigerated. Expiring in 3 days."},
+            {"Salbutamol Inhaler 100mcg", "Respiratory", "SAL-2025-04", 1, today.minusDays(60), today.plusDays(6), "Emergency Bag", "Rescue inhaler. Reorder soon."},
+            {"Cetirizine 10mg", "Antihistamines", "CET-8812-E", 20, today.minusDays(30), today.plusDays(14), "Medicine Cabinet A", "Allergy relief tablets."},
+            {"Ibuprofen 400mg", "Pain Relief", "IBU-9921-X", 15, today.minusDays(30), today.plusDays(25), "Medicine Cabinet B", "Anti-inflammatory tablets."},
+            {"Paracetamol 650mg", "Analgesics", "PCM-650-SAFE", 30, today.minusDays(15), today.plusDays(180), "Medicine Cabinet A", "Common fever and pain relief."},
+            {"Vitamin C 500mg Chewable", "Supplements", "VTC-500-SAFE", 50, today.minusDays(10), today.plusDays(365), "Kitchen Shelf", "Immunity booster vitamins."},
+            {"Metformin 500mg", "Diabetes", "MET-500-SAFE", 60, today.minusDays(20), today.plusDays(240), "Bedroom Drawer", "Daily blood sugar control medication."}
+        };
+
+        String sql = """
+            INSERT INTO medicines (user_id, medicine_name, category, batch_number, quantity, purchase_date, expiry_date, storage_location, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """;
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (Object[] item : demoItems) {
+                ps.setInt(1, userId);
+                ps.setString(2, (String) item[0]);
+                ps.setString(3, (String) item[1]);
+                ps.setString(4, (String) item[2]);
+                ps.setInt(5, (Integer) item[3]);
+                ps.setDate(6, Date.valueOf((LocalDate) item[4]));
+                ps.setDate(7, Date.valueOf((LocalDate) item[5]));
+                ps.setString(8, (String) item[6]);
+                ps.setString(9, (String) item[7]);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+
+        if (isPg) {
+            try (Statement s = conn.createStatement()) {
+                s.execute("SELECT setval(pg_get_serial_sequence('medicines', 'medicine_id'), COALESCE((SELECT MAX(medicine_id) FROM medicines), 1));");
+            } catch (Exception ignored) {
             }
         }
     }
 }
-

@@ -200,9 +200,18 @@ public class LoginFrame extends BaseFrame {
         registerRow.add(noAccountLabel);
         registerRow.add(createAccountBtn);
 
-        dbStatusLabel = new JLabel("Database: Connected to MySQL (medicine_expiry_db)", SwingConstants.CENTER);
+        DatabaseConnection db = DatabaseConnection.getInstance();
+        if (db.testConnection()) {
+            dbStatusLabel = new JLabel("Database: Connected to " + db.getDatabaseTypeDisplay(), SwingConstants.CENTER);
+            dbStatusLabel.setForeground(COLOR_PRIMARY);
+        } else {
+            String err = db.getLastError();
+            if (err != null && err.length() > 65) err = err.substring(0, 62) + "...";
+            dbStatusLabel = new JLabel("Database Disconnected (" + db.getDatabaseTypeDisplay() + ")", SwingConstants.CENTER);
+            dbStatusLabel.setForeground(COLOR_DANGER);
+            dbStatusLabel.setToolTipText(db.getLastError());
+        }
         dbStatusLabel.setFont(FONT_SMALL);
-        dbStatusLabel.setForeground(COLOR_PRIMARY);
         dbStatusLabel.setAlignmentX(CENTER_ALIGNMENT);
 
         bottomPanel.add(registerRow);
@@ -212,12 +221,6 @@ public class LoginFrame extends BaseFrame {
         mainPanel.add(bottomPanel, BorderLayout.SOUTH);
 
         setContentPane(mainPanel);
-
-        // Verify live connection
-        if (!DatabaseConnection.getInstance().testConnection()) {
-            dbStatusLabel.setText("Warning: MySQL Not Connected. Check config/db.properties");
-            dbStatusLabel.setForeground(COLOR_DANGER);
-        }
     }
 
     private void handleSignIn() {

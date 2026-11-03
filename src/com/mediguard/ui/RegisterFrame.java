@@ -195,7 +195,7 @@ public class RegisterFrame extends BaseFrame {
             showSuccess("Registration Successful!\nWelcome, " + fullName + ".\nYou can now log in with your credentials.");
             returnToLogin();
         } else {
-            showError("Failed to register account. Please check your MySQL database connection.");
+            showError("Failed to register account. Please check your database connection.");
         }
     }
 

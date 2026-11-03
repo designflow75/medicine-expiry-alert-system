@@ -102,25 +102,44 @@ java -cp "bin;lib/*;config" com.mediguard.Main
 
 ---
 
-## 🗄️ 5. MySQL Database Configuration
+## 🗄️ 5. Database Configuration (Supabase & MySQL)
 
-The application database parameters are configured in [`config/db.properties`](config/db.properties):
+The application supports both **Supabase (Cloud PostgreSQL)** and **Local MySQL** with automatic schema initialization and demo data seeding.
 
+Configuration is managed in [`config/db.properties`](config/db.properties):
+
+### Option 1: Supabase (Cloud PostgreSQL - Recommended)
 ```properties
-db.host=localhost
-db.port=3306
-db.name=medicine_expiry_db
-db.user=root
-db.password=YOUR_PASSWORD
+db.type=supabase
+db.host=aws-0-ap-southeast-1.pooler.supabase.com
+db.port=5432
+db.name=postgres
+db.user=postgres.ahfygicztfdszpxtohsg
+db.password=YOUR_SUPABASE_PASSWORD
+db.ssl=true
 ```
 
-### Automatic Table Creation:
-When you launch the application, `DatabaseConnection.java` will **automatically** create the `medicine_expiry_db` database, `users` table, and `medicines` table if they do not exist. It also automatically seeds the demo account.
+> **How to get your credentials in Supabase:**
+> 1. Open your Supabase Project dashboard.
+> 2. Go to **Project Settings** -> **Database**.
+> 3. Under **Connection Pooling**, copy the Host, Port (5432), and User (`postgres.<project_ref>`).
+> 4. Fill in your project database password in `db.password`.
 
-You can also run the SQL script manually in MySQL Workbench or CLI:
-```cmd
-mysql -u root -p < schema-mysql.sql
+---
+
+### Option 2: Local MySQL (Alternative / Offline)
+To use local MySQL instead, set `db.type=mysql`:
+```properties
+db.type=mysql
+db.mysql.host=localhost
+db.mysql.port=3306
+db.mysql.name=medicine_expiry_db
+db.mysql.user=root
+db.mysql.password=CampusOne@2026!
 ```
+
+### Automatic Schema Creation:
+Whether connecting to Supabase or MySQL, `DatabaseConnection.java` will **automatically** create the `users` and `medicines` tables, foreign keys, and indexes if they do not exist. It also automatically seeds the demo account with sample medicines.
 
 ---
 
